@@ -1,0 +1,2 @@
+- match: "foo(?:\\+([^@.]+))?\\.?@badass.example.internal"
+  substitution: "bar$1@counterpart.example.internal" 

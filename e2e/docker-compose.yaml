@@ -1,0 +1,114 @@
+---
+services:
+  init:
+    entrypoint: /bin/bash
+    command:
+      - "-c"
+      - |
+        cd /mnt
+        ./gencerts.mk
+        sleep infinity
+    volumes:
+      - .:/mnt
+    healthcheck:
+      test:
+        - "CMD"
+        - "/bin/bash"
+        - "-c"
+        - |
+          cd /mnt
+          ! ./gencerts.mk -q
+      interval: 10s
+      start_period: 10s
+      timeout: 5s
+      retries: 2
+    build:
+      context: ./docker/init
+
+  sendmail:
+    command:
+      - "/usr/local/bin/python"
+      - "/mnt/sendmail.py"
+      - "badass:60025"
+    volumes:
+      - .:/mnt
+    depends_on:
+      - badass
+    image: docker.io/library/python:3.12-bookworm
+    networks:
+      default:
+        aliases:
+          - sendmail.example.internal
+
+  badass:
+    environment:
+      - BADASS_BIND=:60025
+      - BADASS_BIND_IMPLICIT_TLS=:60465
+      - BADASS_CERTIFICATE=/opt/badass/etc/certs/badass.example.internal.cert.pem
+      - BADASS_PRIVATE_KEY=/opt/badass/etc/certs/badass.example.internal.key.pem
+      - BADASS_CA_BUNDLE=/opt/badass/etc/certs/ca.cert.pem
+      - BADASS_HOSTNAME=badass.example.internal
+      - BADASS_VERIFY_SPF=1
+      - BADASS_VERIFY_DKIM=0
+      - BADASS_PERMISSIVE_LOCAL_PART=1
+      - BADASS_LOG_LEVEL=DEBUG
+      - BADASS_REDIRECTION_RULES=/opt/badass/etc/redirection-rules.yaml
+      # - BADASS_NEXT_HOP=mailpit:1025
+      - BADASS_NAMESERVERS=dnsmasq:53
+    volumes:
+      - ./:/opt/badass/etc
+    depends_on:
+      - init
+      - dnsmasq
+      - mailpit
+    networks:
+      default:
+        aliases:
+          - badass.example.internal
+          - mx1.badass.example.internal
+          - mx2.badass.example.internal
+    build:
+      context: ..
+      dockerfile: e2e/docker/badass/Dockerfile
+      target: debug
+
+  dnsmasq:
+    entrypoint: /usr/sbin/dnsmasq
+    command:
+      - "--no-daemon"
+      - "--no-hosts"
+      - "--log-queries"
+      - "--conf-file=/etc/dnsmasq/dnsmasq.conf"
+    volumes:
+      - ./dnsmasq.conf:/etc/dnsmasq/dnsmasq.conf
+    depends_on:
+      - init
+    build:
+      context: ./docker/dnsmasq
+
+  mailpit:
+    environment:
+      - MP_SMTP_BIND_ADDR=:25
+      - MP_SMTP_TLS_CERT=/opt/mailpit/etc/certs/counterpart.example.internal.cert.pem
+      - MP_SMTP_TLS_KEY=/opt/mailpit/etc/certs/counterpart.example.internal.key.pem
+    volumes:
+      - ./certs:/opt/mailpit/etc/certs
+    image: docker.io/axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+    depends_on:
+      - init
+      - dnsmasq
+    networks:
+      default:
+        aliases:
+          - counterpart.example.internal
+          - mx1.counterpart.example.internal
+          - mx2.counterpart.example.internal
+
+networks:
+  default:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.253.0.0/24
